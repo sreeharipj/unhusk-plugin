@@ -17,6 +17,16 @@ no extension install, drop the script into the Script Manager and run it.
 through `pyghidraRun` with a working Python3↔JVM bridge; Jython is the
 zero-setup path, which matters more here than the language version.)
 
+One catch, found by actually running these headless rather than trusting
+that description: Ghidra 12.x gives PyGhidra's script provider explicit
+top priority (`@ExtensionPointProperties(priority = 1000)`,
+`PyGhidraScriptProvider.java`) specifically so it wins any `.py` file that
+doesn't say otherwise — an unmarked script fails with "Ghidra was not
+started with PyGhidra" even though it was never run through `pyghidraRun`.
+`FixBoundaries.py` (and `ApplyUnhusk.py`, when it lands) carries an
+explicit `#@runtime Jython` header tag for exactly this reason; it's not
+optional decoration.
+
 ## Two scripts, run in order
 
 Ghidra's own function-start heuristics are unreliable on stripped,
@@ -72,8 +82,64 @@ analyzeHeadless <project> <name> -process sample.bin \
   -postScript ApplyUnhusk.py   sample.triage.json
 ```
 
+## Address translation
+
+The one format-specific piece of `FixBoundaries.py` is turning unhusk's
+addresses into Ghidra addresses, not instruction decoding — and the first
+version of this section was wrong about ELF, caught only by actually
+running the script headless rather than trusting a source-code read:
+
+- **PE**: unhusk's value is an RVA (relative to image base, by definition).
+  Ghidra's PE loader places every section at `imageBase + RVA`
+  (`PeLoader.java`), so the script computes `currentProgram.getImageBase()
+  .add(rva)`. Verified headless against `bench/hypotheses/v_pe/
+  dufs.stripped.exe` (4132 functions): correct with no adjustment.
+- **ELF**: unhusk's vaddr is the file's raw `p_vaddr`, which is only the
+  same number as Ghidra's *loaded* address when Ghidra used the file's own
+  base unchanged — and it doesn't always. Headless against `bench/run1/
+  build/kibi/c3/kibi.stripped`, an ordinary PIE Rust binary whose `PT_LOAD`
+  segments start at `p_vaddr 0`: Ghidra loaded it at image base `0x100000`
+  anyway (an x86-64-language default, not anything the file specifies).
+  Every one of unhusk's addresses was off by that same `0x100000` until
+  this was caught. The fix reads the file's *original* base back from a
+  property Ghidra itself records at import for exactly this kind of
+  translation (`ElfLoader.ELF_ORIGINAL_IMAGE_BASE_PROPERTY`, exposed as
+  `ElfLoader.getElfOriginalImageBase(currentProgram)`) instead of assuming
+  "loaded == file vaddr": `image_base.add(unhusk_vaddr - original_base)`.
+
+Both loader behaviors confirmed by reading `ElfProgramBuilder.java` /
+`PeLoader.java` in a local Ghidra source clone, and both address formulas
+confirmed against real, auto-analyzed programs, not just plausible-looking
+source. Addresses are built with `Address.add(long)`, not a hex-string
+round trip — the earlier draft of this section formatted addresses with
+`hex()`/`toAddr(string)` and carried a documented Jython gotcha (`hex()`
+on Jython's auto-promoted-to-`long` ints for any address above
+`0x7fffffff` appends a trailing `"L"` that Ghidra's address parser
+rejects); `Address.add(long)` has no string step to have that bug in.
+
 ## Status
 
-Planning stage — `--boundaries` doesn't exist in unhusk yet (small addition:
-serialize `BinaryImage::function_ranges()`, no new parsing needed), and
-neither script is written yet. This file is the design record.
+`--boundaries` ships in unhusk (`--boundaries`, `container::print_boundaries`).
+
+`FixBoundaries.py` is written and headless-verified on real corpus binaries,
+both formats, full pipeline (import → auto-analysis → script → re-analysis):
+
+| binary | functions | matched | corrected | created | failed | exact match after |
+|---|---|---|---|---|---|---|
+| kibi.stripped (ELF) | 796 | 427 | 367 | 2 | 0 | 795/796 |
+| dufs.stripped.exe (PE) | 4132 | 2135 | 1995 | 0 | 2 | 4130/4132 |
+
+Two known, minor gaps, both left as-is rather than engineered around for
+a fraction-of-a-percent of cases:
+
+- **ELF, 1/796**: a 6-byte function got created correctly, then absorbed
+  by Ghidra's own *Shared Return Calls* analyzer during the post-script
+  re-analysis pass (a shared-epilogue jump stub merged into its target).
+  A real function per unhusk's ground truth; Ghidra's own downstream
+  analysis, not this script, undoes it.
+- **PE, 2/4132**: two adjacent tiny (2- and 6-byte) `.pdata` ranges landed
+  on bytes Ghidra had already classified as defined data rather than code
+  (`"Function entryPoint may not be created on defined data"`) — most
+  likely alignment/padding entries in `.pdata` rather than real functions.
+
+`ApplyUnhusk.py` is not started.
