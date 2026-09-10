@@ -1,7 +1,7 @@
 # Corrects Ghidra's function boundaries to match unhusk's --boundaries feed:
 # ground truth from the container format's own unwind metadata (.eh_frame
 # FDEs on ELF, .pdata RUNTIME_FUNCTION entries on PE), which both survive
-# strip --strip-all because unwinding needs them. See unhusk-ghidra/README.md.
+# strip --strip-all because unwinding needs them. See unhusk-plugin/README.md.
 #
 # Ghidra's own function-start heuristics are unreliable on stripped,
 # optimized Rust: merged functions, missed starts, tail-call and jump-table
@@ -16,7 +16,7 @@
 #   unhusk <binary> --boundaries > boundaries.json
 # then, with the same binary loaded in Ghidra:
 #   analyzeHeadless <project> <name> -process <binary> \
-#     -scriptPath /path/to/unhusk-ghidra/ghidra_scripts \
+#     -scriptPath /path/to/unhusk-plugin/ghidra_scripts \
 #     -postScript FixBoundaries.py boundaries.json
 # or run it from the Script Manager, which prompts for the JSON file.
 #
@@ -63,9 +63,9 @@ def check_format(data):
     fmt = data.get("format", "")
     exec_fmt = currentProgram.getExecutableFormat() or ""
     if fmt == "elf" and "ELF" not in exec_fmt:
-        print("unhusk-ghidra: WARNING -- boundaries file says elf, loaded program looks like {}".format(exec_fmt))
+        print("unhusk-plugin: WARNING -- boundaries file says elf, loaded program looks like {}".format(exec_fmt))
     elif fmt == "pe" and "PE" not in exec_fmt:
-        print("unhusk-ghidra: WARNING -- boundaries file says pe, loaded program looks like {}".format(exec_fmt))
+        print("unhusk-plugin: WARNING -- boundaries file says pe, loaded program looks like {}".format(exec_fmt))
 
 
 def to_ghidra_addr(offset, fmt, image_base, elf_original_base):
@@ -99,10 +99,10 @@ def fix_boundaries(data):
     elf_original_base = ElfLoader.getElfOriginalImageBase(currentProgram)
     fmt = data.get("format", "")
     functions = data.get("functions", [])
-    print("unhusk-ghidra: {} boundaries from {} ({})".format(
+    print("unhusk-plugin: {} boundaries from {} ({})".format(
         len(functions), data.get("binary", "?"), fmt or "?"))
     if fmt == "elf":
-        print("unhusk-ghidra: image_base={} elf_original_base={}".format(
+        print("unhusk-plugin: image_base={} elf_original_base={}".format(
             image_base, elf_original_base))
 
     matched = corrected = created = failed = 0
@@ -115,14 +115,14 @@ def fix_boundaries(data):
         end = int(entry["end"], 16)
         if end <= start:
             failed += 1
-            print("unhusk-ghidra: skipping degenerate range 0x{:x}..0x{:x}".format(start, end))
+            print("unhusk-plugin: skipping degenerate range 0x{:x}..0x{:x}".format(start, end))
             continue
 
         entry_addr = to_ghidra_addr(start, fmt, image_base, elf_original_base)
         last_addr = to_ghidra_addr(end - 1, fmt, image_base, elf_original_base)
         if entry_addr is None or last_addr is None:
             failed += 1
-            print("unhusk-ghidra: could not resolve address for 0x{:x}..0x{:x}".format(start, end))
+            print("unhusk-plugin: could not resolve address for 0x{:x}..0x{:x}".format(start, end))
             continue
         target = AddressSet(entry_addr, last_addr)
 
@@ -150,11 +150,11 @@ def fix_boundaries(data):
                 corrected += 1
         else:
             failed += 1
-            print("unhusk-ghidra: failed to create function at {}: {}".format(
+            print("unhusk-plugin: failed to create function at {}: {}".format(
                 entry_addr, cmd.getStatusMsg()))
 
     total = len(functions)
-    print("unhusk-ghidra: matched={} corrected={} created={} failed={} total={}".format(
+    print("unhusk-plugin: matched={} corrected={} created={} failed={} total={}".format(
         matched, corrected, created, failed, total))
 
 
