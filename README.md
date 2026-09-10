@@ -14,29 +14,50 @@ Two backends, three scripts each, same JSON:
 
 ## Example
 
-Run unhusk on the binary, then run the scripts against the same binary in the
-disassembler:
+`kibi`, a small Rust terminal editor, stripped:
 
-```sh
-unhusk sample.bin --boundaries > boundaries.json
-unhusk sample.bin --json        > triage.json
+```console
+$ unhusk kibi.stripped --boundaries > boundaries.json
+$ unhusk kibi.stripped --json        > triage.json
 
-analyzeHeadless <project> <name> -import sample.bin \
-  -scriptPath /path/to/unhusk-plugin/ghidra_scripts \
-  -postScript FixBoundaries.py boundaries.json \
-  -postScript ApplyUnhusk.py   triage.json
+$ analyzeHeadless proj kibi -import kibi.stripped \
+    -scriptPath unhusk-plugin/ghidra_scripts \
+    -postScript FixBoundaries.py boundaries.json \
+    -postScript ApplyUnhusk.py   triage.json
+...
+unhusk-plugin: 796 boundaries from kibi.stripped (elf)
+unhusk-plugin: matched=427 corrected=367 created=2 failed=0 total=796
+unhusk-plugin: 9 triage functions from kibi.stripped (rule count@2, arch x86-64)
+unhusk-plugin: annotated=9 (plate comments=9), at-containing-function=0, no-function=0
 ```
 
-Each STRONG- or SINGLE-tier function gets a bookmark and a header comment:
+FixBoundaries.py corrected 367 boundaries Ghidra had wrong and created 2 it had
+missed, out of 796. ApplyUnhusk.py then marked the 9 functions unhusk
+attributes to author code, each on an exact function start.
+
+In the listing, each one carries a plate comment:
 
 ```
-unhusk: STRONG (count@2, 6 anchors)
-  src/editor.rs
-  src/row.rs
+             unhusk: STRONG (count@2, 6 anchors)
+               src/editor.rs
+               src/row.rs
+             FUN_00127830
+00127830 55  PUSH  RBP
+...
 ```
 
-Six distinct panic sites in that function point at the author's own `src/`.
-Nothing is renamed.
+and a bookmark under category `unhusk`, so Ctrl+B with the filter set to
+`unhusk` lists all nine:
+
+```
+001276c0  [single] unhusk single tier | count@2 | 1 anchor(s) | src/editor.rs
+00127830  [strong] unhusk strong tier | count@2 | 6 anchor(s) | src/editor.rs, src/row.rs
+0012a390  [strong] unhusk strong tier | count@2 | 3 anchor(s) | src/editor.rs
+0012c4c0  [strong] unhusk strong tier | count@2 | 3 anchor(s) | src/editor.rs
+...
+```
+
+Nothing is renamed. A second run replaces its own comment block in place.
 
 ## The three scripts
 
